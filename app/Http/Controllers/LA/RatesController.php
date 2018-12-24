@@ -59,33 +59,35 @@ class RatesController extends Controller
         }
 	}
 
-	public function getRates()
+	// функция, которая добавляет курсы в базу данных
+	public function getRates() 
 	{
-		$dataIn = Rate::all()->last();
-		$dateSt = Carbon::now();	
-		$dateStart =  date('Y-m-d', strtotime($dateSt));
-		
-		if($dataIn == null)
+		$dataIn = Rate::all()->last(); // получаем последнее добавление в базе
+
+		if($dataIn == null) // если в базе пусто, то берем данные за последние 14 дней
 		{
 			$n = 14;
+			$dateSt = Carbon::now()->SubDays(13);
 		}
-		else
+		else // инача - берем только за текущий день
 		{
-			$n = 1;		
+			$n = 1;	
+			$dateSt = Carbon::now();
 		}
 		
-		for ($i=0;$i<$n;$i++){
-			date_sub($dateSt, date_interval_create_from_date_string('1 day'));
-			$d = $dateSt;
-			$d = date('Ymd', strtotime($d));
+		// парсим xml источника данных о курсе
+		for ($i=0; $i<$n; $i++){
 			
-			$data = simplexml_load_file('https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?date='.$d);			
-			if ($data){
-				if((string)$data[0]->currency->exchangedate)
-				{
+			$d = $dateSt; 
+			$d = date('Ymd', strtotime($d)); // конвертируем дату в формат: ггггммдд			
+
+			if ($xml = simplexml_load_file('https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?date='.$d)){
+				if((string)$xml[0]->currency->exchangedate)
+				{	// формируем массив, с полями и значениями для новой строки базы данных
 					$rates = array();
-					$rates += ['exchangedate' => (string)$data[0]->currency->exchangedate];	
-					foreach($data as $rate){			
+					$rates += ['exchangedate' => (string)$xml[0]->currency->exchangedate];	
+					
+					foreach($xml as $rate){			
 						$rates += [
 							(string)$rate->cc	=> 	(float)$rate->rate,
 						];
@@ -94,6 +96,13 @@ class RatesController extends Controller
 					$date = $rates['exchangedate'];		
 					$date = date('Y-m-d', strtotime($date));
 					
+					if ($dataIn != null){
+						$dateIn = $dataIn->DATE;
+						$dateIn = date('Y-m-d', strtotime($dateIn));
+					}else{$dateIn = null;} 					
+			
+					if ($dateIn < $date){// проверяем на повтор дней
+						// заносим данные в базу данных
 						$baseCurrency = 'USD';
 						$dataIn = new Rate;
 						$dataIn->DATE = $date;
@@ -104,15 +113,17 @@ class RatesController extends Controller
 						$dataIn->UAH = round((float)$rates['USD'],2);
 						$dataIn->save();
 			
+					}
 				}
-				else {
+				else {// если текущая дата не парсится, наращиваем $n (добавляем новую дату в диапазон)
 					$n++;
-					if ($n > 5){break;}
+					if ($n < 19){break;} // контроль, если подряд пустых и непустых дат будет больше 19, то выход из цикла
 				}
-			}else{continue;}			
+			}else{continue;}// если хмl не прочитался, то берем следующую дату
 			
-		}
-		
+			//date_sub($dateSt, date_interval_create_from_date_string('1 day'));// идем на один день назад и возращаемся в начало цикла
+			$dateSt = $dateSt->AddDay(); // добавляем один день и идем в начало цикла
+		}		
 	}
 
 	/**
